@@ -13,12 +13,10 @@ class MaxList(TestDomain):
             L = random.randint(1,10) # a length of a list
             yield list(numpy.random.choice(self.alphabet, size=L))
 
-    def sample_data(self, n:int):
-        for inp in self.sample_input(n):
-            yield (inp, self.call(inp))
-
     def call(self, lst:list):
-        return max(lst)
+        # NOTE that call should return a sequence of outputs that has the same length as list
+
+        return (["."] * (len(lst)-1)) + [max(lst)]
 
 if __name__ == "__main__":
 
