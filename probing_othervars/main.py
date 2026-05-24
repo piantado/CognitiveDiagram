@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import warnings
 warnings.filterwarnings("ignore", category = UserWarning)
 import os
@@ -7,208 +5,180 @@ import json
 import csv
 import torch
 import numpy as np
-from tqdm import tqdm
+import joblib
 import building_cognitive_diagram as bcd
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 import sample_generation as sg
 import model_training as mt
-import classification as cla
-import clustering as clu
+import analysis_functions as af
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.svm import SVC
 
-# ==== Variables ====
-task_type = "MaxNum"    # e.g. "WCST", "Nback", "MaxNum"
+### Variables ###
+task_type = "FiniteList"    # e.g. "WCST", "Nback", "MaxNum", "FiniteSet", "FiniteList", "FiniteStack"
+if_minimal = False
 
 seq_len = 10    # the length of each stimuli sequence
-num_train_samples = 10000
-num_test_samples = 1000
-random_seed = 19
+num_train_trials = 50000
+num_test_trials = 10000
+random_seed = 42
 
-hidden_layer_size = 32
+hidden_layer_size = [16, 32, 64]
+L2_lambda = [0, 1e-5, 1e-4, 1e-3]
+target_cond = None	# or {"size": 16, "l2": 1e-3}
+
 batch_size = 4
 learning_rate = 0.001
 val_ratio = 0.2    # validation ratio
 
-tol = 1e-2    # tolerance for SVM classification
-num_str_vars = 2    # how many last stimuli to consider for str_vars
+tol = 1e-3
 
-# ==== Directories ====
-output_path = os.path.join('output', task_type)
+### Directories ###
+results_path = os.path.join('results', task_type + f"_random{random_seed}")
+os.makedirs(results_path, exist_ok = True)
 
-os.makedirs(output_path, exist_ok = True)
-
+### Main Processing ###
 if __name__ == "__main__":
-    
-    print("- NOTE: If you want to change the task variables, refer to building_cognitive_diagram.py...")
-    
-    # build a cognitive diagram
-    if task_type == "Nback":
-        task = bcd.build_diagram_Nback()
-    elif task_type == "MaxNum":
-        task = bcd.build_diagram_MaxNum()
-    elif task_type == "WCST":
-        task = bcd.build_diagram_WCST()
-    
-    # save the diagram
-    with open(os.path.join(output_path, f"{task_type}_task.json"), "w") as f:
-        json.dump(task.to_dict(), f, indent = 2)
-        
-    # generate samples
-    print("- Generating samples...")
-    
-    train_samples, test_samples = sg.generate_samples(task, seq_len, num_train_samples, num_test_samples, random_seed)
-    train_ans, _ = sg.generate_ans_state(task, train_samples)
-    test_ans, test_state = sg.generate_ans_state_test(task, test_samples)
-    
-    stimuli_enc, ans_enc = sg.generate_enc(task)
-    
-    train_samples_encoded = sg.encode_samples(train_samples, stimuli_enc)
-    train_ans_encoded = sg.encode_answers(train_ans, ans_enc)
-    
-    test_samples_encoded = sg.encode_samples(test_samples, stimuli_enc)
-    test_ans_encoded = sg.encode_answers(test_ans, ans_enc)
-    
-    np.savez_compressed(os.path.join(output_path, f"{task_type}_test_data.npz"), 
-                        test_samples = test_samples, test_ans = test_ans, test_state = test_state)
 
-    # train an RNN model
-    print("- Training an RNN model...")
-    train_loader, val_loader = mt.generate_loader(train_samples_encoded, train_ans_encoded, val_ratio, batch_size, random_seed, if_train = True)
-    test_loader = mt.generate_loader(test_samples_encoded, test_ans_encoded, val_ratio, batch_size, random_seed, if_train = False)
-    
-    model, log = mt.train_model(train_loader, val_loader, len(task.stimuli_type), hidden_layer_size, len(task.action_type), learning_rate)
-    
-    test_vectors = mt.extract_features(model, test_loader)
+	print("Note: If you want to change the task variables, refer to building_cognitive_diagram.py")
+	print(f"task_type: {task_type}")
 
-    torch.save(model.state_dict(), os.path.join(output_path, f"{task_type}_model_state.pt"))
-    with open(os.path.join(output_path, f"{task_type}_train_log.csv"), "w", newline = "") as f:
-        writer = csv.DictWriter(f, fieldnames = log[0].keys())
-        writer.writeheader()
-        writer.writerows(log)
-    
-    # [analysis 1] Probing
-    print("- Doing an analysis: Probing...")
-    shuffle_acc = cla.kfold(test_vectors, test_state, "SVM_lin", random_seed, k = 10, 
-                           target_dim = None, dim_method = None, state_shuffle = True, tol = tol)
-    lin_acc = cla.kfold(test_vectors, test_state, "SVM_lin", random_seed, k = 10, 
-                           target_dim = None, dim_method = None, state_shuffle = False, tol = tol)
-    rbf_acc = cla.kfold(test_vectors, test_state, "SVM_rbf", random_seed, k = 10, 
-                           target_dim = None, dim_method = None, state_shuffle = False, tol = tol)
-    
-    print(f"Summary: SVM + shuffle {np.mean(shuffle_acc):.4f} | SVM + linear kernel {np.mean(lin_acc):.4f} | SVM + rbf kernel {np.mean(rbf_acc):.4f}")
-    
-    probing_acc = {"shuffle_acc": shuffle_acc, "lin_acc": lin_acc, "rbf_acc": rbf_acc}
-    with open(os.path.join(output_path, f"{task_type}_probing_acc.json"), "w") as f:
-        json.dump(probing_acc, f, indent = 2)
+	# save specifications
+	metadata = {
+		"task_type": task_type, "seq_len": seq_len, "num_train_trials": num_train_trials, "num_test_trials": num_test_trials,
+		"random_seed": random_seed, "hidden_layer_size": hidden_layer_size, "L2_lambda": L2_lambda, "batch_size": batch_size,
+		"learning_rate": learning_rate, "val_ratio": val_ratio, "tol": tol, "if_minimal": if_minimal
+		}
+	with open(os.path.join(results_path, f"{task_type}_metadata.json"), "w") as f:
+		json.dump(metadata, f, indent = 2)
 
-    # [analysis 2] Dimension Reduction
-    print("- Doing an analysis: Dimension Reduction...")
-    max_dim = min(hidden_layer_size, len(np.unique(test_state)))
-    
-    dimension_acc = dict()
-    
-    for target_dim in tqdm(range(1, max_dim + 1), desc = f"Classification (max_dim: {max_dim})", leave = False):
-        if target_dim == max_dim:
-            target_dim = None
-            
-        lin_acc_lda = cla.kfold(test_vectors, test_state, "SVM_lin", random_seed, k = 10, 
-                               target_dim = target_dim, dim_method = "LDA", state_shuffle = False, tol = tol)
-        rbf_acc_lda = cla.kfold(test_vectors, test_state, "SVM_rbf", random_seed, k = 10, 
-                               target_dim = target_dim, dim_method = "LDA", state_shuffle = False, tol = tol)
-        
-        lin_acc_pca = cla.kfold(test_vectors, test_state, "SVM_lin", random_seed, k = 10, 
-                               target_dim = target_dim, dim_method = "PCA", state_shuffle = False, tol = tol)
-        rbf_acc_pca = cla.kfold(test_vectors, test_state, "SVM_rbf", random_seed, k = 10, 
-                               target_dim = target_dim, dim_method = "PCA", state_shuffle = False, tol = tol)
-        
-        dimension_acc[str(target_dim)] = {"lin_acc_lda": lin_acc_lda, "rbf_acc_lda": rbf_acc_lda, 
-                                          "lin_acc_pca": lin_acc_pca, "rbf_acc_pca": rbf_acc_pca}
-    
-    with open(os.path.join(output_path, f"{task_type}_dimension_acc.json"), "w") as f:
-        json.dump(dimension_acc, f, indent = 2)
+	# build a cognitive diagram
+	task = bcd.build_cognitive_diagram(task_type, if_minimal)
+	with open(os.path.join(results_path, f"{task_type}_task.json"), "w") as f:
+		json.dump(task.to_dict(), f, indent = 2)
 
-    # [analysis 3] Probing Other Variables
-    print("- Doing an analysis: Probing Other Variables...")
-    vars_acc = {"func_vars": dict(), "str_vars": dict()}
-    
-    func_vars = task.generate_func_vars(test_samples)
-    for var in tqdm(func_vars.keys(), desc = "func_vars", leave = False):
-        lin_acc = cla.kfold(test_vectors, func_vars[var], "SVM_lin", random_seed, k = 10, 
-                               target_dim = None, dim_method = None, state_shuffle = False, tol = tol)
-        rbf_acc = cla.kfold(test_vectors, func_vars[var], "SVM_rbf", random_seed, k = 10, 
-                               target_dim = None, dim_method = None, state_shuffle = False, tol = tol)
-        vars_acc["func_vars"][var] = {"lin_acc": lin_acc, "rbf_acc": rbf_acc}
-    
-    for var in tqdm(range(num_str_vars, 0, -1), desc = "str_vars", leave = False):
-        str_var = [sample[-var] for sample in test_samples]
-        lin_acc = cla.kfold(test_vectors, str_var, "SVM_lin", random_seed, k = 10, 
-                               target_dim = None, dim_method = None, state_shuffle = False, tol = tol)
-        rbf_acc = cla.kfold(test_vectors, str_var, "SVM_rbf", random_seed, k = 10, 
-                               target_dim = None, dim_method = None, state_shuffle = False, tol = tol)
-        
-        vars_acc["str_vars"][f"{var} positions back"] = {"lin_acc": lin_acc, "rbf_acc": rbf_acc}
-        
-    with open(os.path.join(output_path, f"{task_type}_vars_acc.json"), "w") as f:
-        json.dump(vars_acc, f, indent = 2)
+	# generate samples
+	print("Sample Generation")
+	train_samples, test_samples, train_ans, test_ans, test_state, stimuli_encoder, ans_encoder, train_loader, val_loader, test_loader = sg.generate_loaders(task, task_type, seq_len, num_train_trials, num_test_trials, random_seed, val_ratio, batch_size)
 
-    # [analysis 4] Clustering
-    print("- Doing an analysis: Clustering...")
-    num_states = len(np.unique(test_state))
-    k_list = [num_states - 1, num_states, num_states + 1, 2 * num_states, 4 * num_states, 6 * num_states, 8 * num_states]
-    eps_list = [0.25, 0.5, 1, 1.5, 2]
-    
-    clustering_wamb = {"cog_state": dict(), "func_vars": dict(), "str_vars": dict(), "k_list": k_list, "eps_list": eps_list}
-    
-    # cog_state
-    clustering_wamb["cog_state"] = {"kmeans": [], "DBSCAN": []}
-    
-    for k in k_list:
-        cluster = clu.run_kmeans(test_vectors, k, random_seed)
-        wamb = clu.calculate_wamb(test_state, cluster)
-        clustering_wamb["cog_state"]["kmeans"].append(wamb)
-        
-    for eps in eps_list:
-        cluster = clu.run_DBSCAN(test_vectors, eps)
-        wamb = clu.calculate_wamb(test_state, cluster)
-        clustering_wamb["cog_state"]["DBSCAN"].append(wamb)
-        
-    # func_vars
-    for var in tqdm(func_vars.keys(), desc = "func_vars", leave = False):
-        clustering_wamb["func_vars"][var] = {"kmeans": [], "DBSCAN": []}
-        
-        for k in k_list:
-            cluster = clu.run_kmeans(test_vectors, k, random_seed)
-            wamb = clu.calculate_wamb(func_vars[var], cluster)
-            clustering_wamb["func_vars"][var]["kmeans"].append(wamb)
-            
-        for eps in eps_list:
-            cluster = clu.run_DBSCAN(test_vectors, eps)
-            wamb = clu.calculate_wamb(func_vars[var], cluster)
-            clustering_wamb["func_vars"][var]["DBSCAN"].append(wamb)
-    
-    # str_vars
-    for var in tqdm(range(num_str_vars, 0, -1), desc = "str_vars", leave = False):
-        str_var = [sample[-var] for sample in test_samples]
-        clustering_wamb["str_vars"][f"{var} positions back"] = {"kmeans": [], "DBSCAN": []}
-        
-        for k in k_list:
-            cluster = clu.run_kmeans(test_vectors, k, random_seed)
-            wamb = clu.calculate_wamb(str_var, cluster)
-            clustering_wamb["str_vars"][f"{var} positions back"]["kmeans"].append(wamb)
-        
-        for eps in eps_list:
-            cluster = clu.run_DBSCAN(test_vectors, eps)
-            wamb = clu.calculate_wamb(str_var, cluster)
-            clustering_wamb["str_vars"][f"{var} positions back"]["DBSCAN"].append(wamb)
-    
-    with open(os.path.join(output_path, f"{task_type}_clustering_wamb.json"), "w") as f:
-        json.dump(clustering_wamb, f, indent = 2)
-    
-    # save the metadata
-    metadata = { "task_type": task_type, "seq_len": seq_len, "num_train_samples": num_train_samples,
-                "num_test_samples": num_test_samples, "random_seed": random_seed, "hidden_layer_size": hidden_layer_size,
-                "batch_size": batch_size, "learning_rate": learning_rate, "val_ratio": val_ratio, "tol": tol,
-                "num_str_vars": num_str_vars }
-    with open(os.path.join(output_path, f"{task_type}_metadata.json"), "w") as f:
-        json.dump(metadata, f, indent = 2)
-    
-    print("- Code done successfully!")
+	print(f"- train_samples.shape: {np.array(train_samples).shape} | train_ans.shape: {np.array(train_ans).shape}")
+	print(f"- test_samples.shape: {np.array(test_samples).shape} | test_ans.shape: {np.array(test_ans).shape} | test_state: {np.array(test_state).shape}")
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_test_data.npz"), 
+                        train_samples = np.array(train_samples),
+						train_ans = np.array(train_ans),
+						test_samples = np.array(test_samples),
+						test_ans = np.array(test_ans),
+						test_state = np.array(test_state)
+						)
 
+	joblib.dump({
+				"stimuli_encoder": stimuli_encoder,
+				"ans_encoder": ans_encoder
+				}, os.path.join(results_path, f"{task_type}_encoders.joblib"))
+
+	
+	# model training & state decoding
+	print("Model Training")
+	vectors_all_conds = {size: dict() for size in hidden_layer_size}
+	acc_all_conds = {size: dict() for size in hidden_layer_size}
+
+	best_acc_conds = {
+		"acc_lin": {
+			"mean_acc": -np.inf, "size": None, "l2": None, "values": None},
+		"acc_rbf":{
+			"mean_acc": -np.inf, "size": None, "l2": None, "values": None}
+		}
+
+	stim_level_sample, _, stim_level_ans, stim_level_state, _ = mt.stim_level_features(test_samples, None, test_ans, test_state)
+
+	clf_lin = make_pipeline(StandardScaler(), SVC(kernel = "linear", tol = tol))
+	clf_rbf = make_pipeline(StandardScaler(), SVC(kernel = "rbf", tol = tol))
+	cv = StratifiedKFold(n_splits = 10, shuffle = True, random_state = random_seed)
+
+	for size in hidden_layer_size:
+		for l2 in L2_lambda:
+
+			print(f"- size: {size} | l2: {l2}")
+			model, log = mt.train_model(train_loader, val_loader, test_loader, task, learning_rate, 
+							   layer_size = size, regularization = l2, random_seed = random_seed, get_vectors = True)
+			test_vectors = mt.extract_features(model, test_loader)
+
+			_, stim_level_vec, _, _, _ = mt.stim_level_features(test_samples, test_vectors, None, None)
+			
+			vectors_all_conds[size][l2] = stim_level_vec
+
+			acc_lin = cross_val_score(clf_lin, stim_level_vec, stim_level_state, cv = cv, scoring = "accuracy")
+			acc_rbf = cross_val_score(clf_rbf, stim_level_vec, stim_level_state, cv = cv, scoring = "accuracy")
+
+			acc_all_conds[size][l2] = {"acc_lin": acc_lin, "acc_rbf": acc_rbf}
+
+			if (target_cond is None) or ((target_cond["size"] == size) and (target_cond["l2"] == l2)):
+				if best_acc_conds["acc_lin"]["mean_acc"] < np.mean(acc_lin):
+					best_acc_conds["acc_lin"] = {"mean_acc": np.mean(acc_lin), "size": size, "l2": l2, "values": acc_lin}
+					model_lin = model
+					log_lin = log
+				if best_acc_conds["acc_rbf"]["mean_acc"] < np.mean(acc_rbf):
+					best_acc_conds["acc_rbf"] = {"mean_acc": np.mean(acc_rbf), "size": size, "l2": l2, "values": acc_rbf}
+					model_rbf = model
+					log_rbf = log
+
+	vectors_all_conds = {str(key): val for key, val in vectors_all_conds.items()}
+	acc_all_conds = {str(key): val for key, val in acc_all_conds.items()}
+
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_vectors_all.npz"), **vectors_all_conds)
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_acc_all.npz"), **acc_all_conds)
+
+	print(f"- acc_lin | mean_acc: {best_acc_conds['acc_lin']['mean_acc']:.4f} | cond: {best_acc_conds['acc_lin']['size']}, {best_acc_conds['acc_lin']['l2']}")
+	print(f"- acc_rbf | mean_acc: {best_acc_conds['acc_rbf']['mean_acc']:.4f} | cond: {best_acc_conds['acc_rbf']['size']}, {best_acc_conds['acc_rbf']['l2']}")
+
+	if best_acc_conds["acc_lin"]["mean_acc"] > best_acc_conds["acc_rbf"]["mean_acc"]:
+		vectors = vectors_all_conds[str(best_acc_conds["acc_lin"]["size"])][best_acc_conds["acc_lin"]["l2"]]
+		model, log = model_lin, log_lin
+		size, l2 = best_acc_conds["acc_lin"]["size"], best_acc_conds["acc_lin"]["l2"]
+		SVM_kernel = "linear"
+	else:
+		vectors = vectors_all_conds[str(best_acc_conds["acc_rbf"]["size"])][best_acc_conds["acc_rbf"]["l2"]]
+		model, log = model_rbf, log_rbf
+		size, l2 = best_acc_conds["acc_rbf"]["size"], best_acc_conds["acc_rbf"]["l2"]
+		SVM_kernel = "rbf"
+	print(f"- {SVM_kernel} selected")
+
+	torch.save(model.state_dict(), os.path.join(results_path, f"{task_type}_model_layer{size}_decay{l2}.pt"))
+	joblib.dump(log, os.path.join(results_path, f"{task_type}_train_layer{size}_decay{l2}_log.npz"))
+
+	# Analysis 1
+	print("Analysis 1")
+	readout_acc = af.readout_decodability(vectors, stim_level_state, model, SVM_kernel, k = 10, random_state = random_seed, tol = 1e-12)
+	readout_sep = af.readout_separability(model, vectors, stim_level_state, tol = 1e-12)
+
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_acc_readout.npz"), **readout_acc)
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_separability_readout.npz"), **readout_sep)
+
+	# Analysis 2
+	print("Analysis 2")
+	other_vars = af.get_other_vars(test_samples, test_ans, stim_level_state)
+	clustering_metrics = af.get_clustering(vectors, other_vars, len(np.unique(list(task.states()))), random_seed)
+
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_othervars.npz"), **other_vars)
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_clustering_metrics.npz"), **clustering_metrics)
+
+	# Analysis 3
+	print("Analysis 3")
+	conf_dict = af.conf_samples(model, vectors, test_loader, stim_level_state, percentage = 0.3)
+	conf_acc = af.decoder_conf(conf_dict, stim_level_state, SVM_kernel, k = 10, random_seed = random_seed)
+	pval_dict = af.perm_decoder_conf(conf_acc, num_perms = 1000, tol = 1e-12, random_seed = random_seed)
+
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_conf_dict.npz"), **conf_dict)
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_conf_acc.npz"), **conf_acc)
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_pval_dict.npz"), **pval_dict)
+
+	# Analysis 4
+	print("Analysis 4")
+	epoch_acc = af.epoch_decodability(test_samples, log, test_state, SVM_kernel, k = 10, random_seed = random_seed)
+	alignment = af.compute_alignment(log, epoch_acc)
+
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_epoch_acc.npz"), **epoch_acc)
+	np.savez_compressed(os.path.join(results_path, f"{task_type}_alignment.npz"), **alignment)
+
+	print("Analyses finished successfully!")

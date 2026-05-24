@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans, DBSCAN
+from sklearn.metrics import adjusted_rand_score
 
 def run_kmeans(vec_list, k, random_seed):
     
@@ -17,14 +18,14 @@ def run_kmeans(vec_list, k, random_seed):
     
     return cluster_pred
 
-def run_DBSCAN(vec_list, eps):
+def run_DBSCAN(vec_list, eps, num_states):
     
     vec_list = StandardScaler().fit_transform(vec_list)
     
     pca = PCA(n_components = 0.9)
     vec_list = pca.fit_transform(vec_list)
     
-    min_samples = max(vec_list.shape[1] + 1, 5)
+    min_samples = max(vec_list.shape[1] + 1, num_states * 2)
     
     dbscan = DBSCAN(eps = eps, min_samples = min_samples)
     cluster_pred = dbscan.fit_predict(vec_list)
@@ -59,5 +60,9 @@ def calculate_wamb(state_list, pred_list):
         wamb_k += amb_k * n_k
     
     return wamb_k / abs_HQ
+
     
+def calculate_ari(state_list, pred_list):
+    
+    return adjusted_rand_score(state_list, pred_list)
     

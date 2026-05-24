@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 class UniqueColoring:
 
     def __init__(self):
@@ -22,7 +20,6 @@ class Task:
         self.action = dict()
         self.initial = None
         self.nth = None
-        self.othervars = None
         
     def states(self):
         return self.nextState.keys()
@@ -48,14 +45,16 @@ class Task:
           print("State ", state, " goes to: ", self.nextState[state], ", with action: ", self.action[state])
      
     def seqActions(self, stimuli):
-        state = self.initial
-        action = ""
+        curr_state = self.initial
+        action = []
+        state = []
         
-        assert state is not None
+        assert curr_state is not None
         
         for stimulus in stimuli:
-          action += self.action[str(state)][str(stimulus)]
-          state = self.nextState[str(state)][str(stimulus)]
+          action.append(self.action[str(curr_state)][str(stimulus)])
+          curr_state = self.nextState[str(curr_state)][str(stimulus)]
+          state.append(curr_state)
         
         return action, state
     
@@ -101,7 +100,6 @@ class Task:
               pairChecked.add(pair)
           
         return cd_temp
-    
     
     def to_dict(self) -> dict:
         
