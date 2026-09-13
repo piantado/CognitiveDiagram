@@ -31,6 +31,49 @@ class RNN(nn.Module):
         # return last_hidden
         return out
 
+    def extract_hidden_before(self, x):
+        self.eval()
+        with torch.no_grad():
+            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_layer_size).to(x.device)
+            out, _ = self.rnn(x, h0)
+            hidden_before = torch.cat([torch.zeros_like(out[:, :1, :]), out[:, :-1, :]], dim = 1)
+        return hidden_before
+
+
+    def step_wise_rnn(self, x, Q, corrupt_fn = None, return_hidden = False):
+
+        batch_size, seq_len, _ = x.shape
+
+        cell = nn.RNNCell(input_size = self.rnn.input_size, hidden_size = self.hidden_layer_size, nonlinearity = self.rnn.nonlinearity)
+
+        cell.weight_ih.data.copy_(self.rnn.weight_ih_l0.data)
+        cell.weight_hh.data.copy_(self.rnn.weight_hh_l0.data)
+        cell.bias_ih.data.copy_(self.rnn.bias_ih_l0.data)
+        cell.bias_hh.data.copy_(self.rnn.bias_hh_l0.data)
+
+        h = torch.zeros(batch_size, self.hidden_layer_size)
+
+        outputs = []
+        hidden = []
+
+        for t in range(seq_len):
+
+            if corrupt_fn is not None:
+                h = corrupt_fn(h, Q, t)
+
+            h = cell(x[:, t, :], h)
+
+            hidden.append(h)
+            outputs.append(self.fc(h))
+
+        outputs = torch.stack(outputs, dim = 1)
+
+        if return_hidden:
+            hidden = torch.stack(hidden, dim=1)
+            return outputs, hidden
+
+        return outputs
+
     
 def generate_loader(samples_encoded, ans_encoded, val_ratio, batch_size, random_seed, if_train):
     
@@ -150,7 +193,7 @@ def extract_features(model, loader):
     model.eval()
     for samples_batch, ans_batch in loader:
         with torch.no_grad():
-            feat_batch = model.extract_hidden(samples_batch)
+            feat_batch = model.extract_hidden_before(samples_batch)
         for feature in feat_batch: 
             vec_list.append(feature.tolist()) 
             

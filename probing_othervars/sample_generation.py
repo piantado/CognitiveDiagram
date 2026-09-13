@@ -70,7 +70,7 @@ def encode_answers(ans_list, ans_encoder):
 def generate_loaders(task, task_type, seq_len, num_train_trials, num_test_trials, random_seed, val_ratio, batch_size):
  
     train_samples, test_samples = generate_samples(task, seq_len, num_train_trials, num_test_trials, random_seed)   # nested list form
-    train_ans, _ = generate_ans_state(task, train_samples)  # nested list
+    train_ans, train_state = generate_ans_state(task, train_samples)  # nested list
     test_ans, test_state = generate_ans_state(task, test_samples)   # nested list
 
     stimuli_encoder, ans_encoder = generate_encoder(task)
@@ -84,4 +84,4 @@ def generate_loaders(task, task_type, seq_len, num_train_trials, num_test_trials
     train_loader, val_loader = mt.generate_loader(train_samples_encoded, train_ans_encoded, val_ratio, batch_size, random_seed, if_train = True)
     test_loader = mt.generate_loader(test_samples_encoded, test_ans_encoded, val_ratio, batch_size, random_seed, if_train = False)
 
-    return train_samples, test_samples, train_ans, test_ans, test_state, stimuli_encoder, ans_encoder, train_loader, val_loader, test_loader
+    return train_samples, test_samples, train_ans, test_ans, train_state, test_state, stimuli_encoder, ans_encoder, train_loader, val_loader, test_loader

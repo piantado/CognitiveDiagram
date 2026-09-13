@@ -44,7 +44,7 @@ def build_cognitive_diagram(task_type, if_minimal = False):
     elif task_type == "MaxNum":
 
         # task variables
-        nth = 1     # nth biggest digit in the sequence
+        nth = 2     # nth biggest digit in the sequence
         stimuli_type = [str(i) for i in range(1, 10)]   # if include zero or negatives, results in error at sorted(comb)
         action_type = [str(i) for i in range(0, 10)]    # different than the actual actions that appear
     
@@ -87,7 +87,7 @@ def build_cognitive_diagram(task_type, if_minimal = False):
         for currState in task.states():
             for stimulus in stimuli_type:
                 nextState = currState[1:] + stimulus
-                action = str(0) if currState[0] == stimulus else str(1) 
+                action = str(1) if currState[0] == stimulus else str(0) 
                 task.add_edge(currState, stimulus, action, nextState)
     
         
@@ -188,13 +188,6 @@ def build_cognitive_diagram(task_type, if_minimal = False):
                 if currState == "E":
                     nextState = "E"
                     action = "0"
-                elif stimulus.startswith("p"):
-                    if len(currState) >= max_depth:
-                        nextState = "E"
-                        action = "0"
-                    else:
-                        nextState = currState + stimulus[-1]
-                        action = "0"
                 elif stimulus == "pop":
                     if len(currState) < 1:
                         nextState = currState
@@ -202,6 +195,14 @@ def build_cognitive_diagram(task_type, if_minimal = False):
                     else:
                         nextState = currState[:-1]
                         action = currState[-1]
+                elif stimulus.startswith("p"):
+                    if len(currState) >= max_depth:
+                        nextState = "E"
+                        action = "0"
+                    else:
+                        nextState = currState + stimulus[-1]
+                        action = "0"
+                
 
                 task.add_edge(currState, stimulus, action, nextState)
 

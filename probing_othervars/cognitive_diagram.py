@@ -52,9 +52,10 @@ class Task:
         assert curr_state is not None
         
         for stimulus in stimuli:
-          action.append(self.action[str(curr_state)][str(stimulus)])
-          curr_state = self.nextState[str(curr_state)][str(stimulus)]
-          state.append(curr_state)
+            state.append(curr_state)
+            action.append(self.action[str(curr_state)][str(stimulus)])
+
+            curr_state = self.nextState[str(curr_state)][str(stimulus)]
         
         return action, state
     
